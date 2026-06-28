@@ -1,3 +1,6 @@
+#ifndef FONT_HANDLER_H
+#define FONT_HANDLER_H
+
 #include <stdint.h>
 
 typedef struct {
@@ -12,3 +15,5 @@ typedef struct {
     float    ker_x;
     float    ker_y;
 } GlyphInfo;
+
+#endif

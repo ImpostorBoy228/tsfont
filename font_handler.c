@@ -1,6 +1,8 @@
 #include "font_handler.h"
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include <limits.h>
 #include <ft2build.h>
 
 #include FT_FREETYPE_H
@@ -47,6 +49,8 @@ static uint32_t deutf8(const unsigned char **p, const unsigned char *end) {
 }
 
 void* font_load(const unsigned char *data, unsigned long len, float pixel_size) {
+    if (!data) return NULL;
+
     FT_Library library;
     FT_Error error = FT_Init_FreeType(&library);
     if (error) return NULL;
@@ -54,6 +58,12 @@ void* font_load(const unsigned char *data, unsigned long len, float pixel_size) 
     FT_Face face;
     error = FT_New_Memory_Face(library, data, (FT_Long)len, 0, &face);
     if (error) {
+        FT_Done_FreeType(library);
+        return NULL;
+    }
+
+    if (pixel_size <= 0.0f || !isfinite(pixel_size)) {
+        FT_Done_Face(face);
         FT_Done_FreeType(library);
         return NULL;
     }
@@ -107,13 +117,13 @@ float cock_measure(void *font, const char *utf8, unsigned long len) {
         FT_UInt glyph_index = FT_Get_Char_Index(face, cp);
         if (glyph_index == 0) continue; // buzz dont care ts
         if (!first) {
-            FT_Vector kerning;
+            FT_Vector kerning = {0, 0};
             FT_Get_Kerning(face, FT_Get_Char_Index(face, prev_cp), glyph_index,
                            FT_KERNING_DEFAULT, &kerning);
             pen_x += kerning.x / 64.0f;
         }
 
-        FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT);
+        if (FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT)) continue;
         pen_x += face->glyph->advance.x / 64.0f;
 
         first = 0;
@@ -126,7 +136,7 @@ int font_fill_glyphs(void *font,
                      const char *utf8, unsigned long len,
                      GlyphInfo *out_infos, int max_glyphs,
                      unsigned char **out_bitmap, unsigned long *out_bitmap_size) {
-    if (!font || !utf8 || len == 0 || !out_infos || max_glyphs <= 0)
+    if (!font || !utf8 || len == 0 || !out_infos || !out_bitmap || !out_bitmap_size || max_glyphs <= 0)
         return -1;
 
     struct FontHandle { FT_Face face; FT_Library library; };
@@ -148,7 +158,12 @@ int font_fill_glyphs(void *font,
         if (error) return -1;
 
         FT_GlyphSlot slot = face->glyph;
-        total_bytes += (size_t)slot->bitmap.rows * (size_t)slot->bitmap.pitch;
+        size_t row_bytes = (size_t)slot->bitmap.rows * (size_t)slot->bitmap.pitch;
+        if ((size_t)slot->bitmap.rows != 0 && row_bytes / (size_t)slot->bitmap.rows != (size_t)slot->bitmap.pitch) {
+            return -1;
+        }
+        if (total_bytes > SIZE_MAX - row_bytes) return -1;
+        total_bytes += row_bytes;
         glyph_count++;
         first = 0;
     }
@@ -183,14 +198,14 @@ int font_fill_glyphs(void *font,
         info->adv_x = slot->advance.x / 64.0f;
         info->br_x   = (float)slot->bitmap_left;
         info->br_y   = (float)slot->bitmap_top;
-        info->bm_width  = slot->bitmap.width;
-        info->bm_rows   = slot->bitmap.rows;
-        info->bm_pitch  = slot->bitmap.pitch;
-        info->bm_offset = (int)byte_offset;
+        info->bm_width  = (int)slot->bitmap.width;
+        info->bm_rows   = (int)slot->bitmap.rows;
+        info->bm_pitch  = (int)slot->bitmap.pitch;
+        info->bm_offset = byte_offset <= INT_MAX ? (int)byte_offset : -1;
 
         // Кернинг с предыдущим глифом
         if (!first) {
-            FT_Vector kerning;
+            FT_Vector kerning = {0, 0};
             FT_Get_Kerning(face, prev_glyph_index, glyph_index,
                            FT_KERNING_DEFAULT, &kerning);
             info->ker_x = kerning.x / 64.0f;
@@ -202,7 +217,15 @@ int font_fill_glyphs(void *font,
 
         // Копируем bitmap в общий буфер
         size_t bm_bytes = (size_t)slot->bitmap.rows * (size_t)slot->bitmap.pitch;
-        if (bm_bytes > 0 && bitmap_buf) {
+        if ((size_t)slot->bitmap.rows != 0 && bm_bytes / (size_t)slot->bitmap.rows != (size_t)slot->bitmap.pitch) {
+            free(bitmap_buf);
+            return -1;
+        }
+        if (byte_offset > SIZE_MAX - bm_bytes) {
+            free(bitmap_buf);
+            return -1;
+        }
+        if (bm_bytes > 0 && bitmap_buf && slot->bitmap.buffer) {
             memcpy(bitmap_buf + byte_offset, slot->bitmap.buffer, bm_bytes);
         }
         byte_offset += bm_bytes;
