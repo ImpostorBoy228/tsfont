@@ -240,6 +240,20 @@ int font_fill_glyphs(void *font,
     return idx;
 }
 
+float cock_kern(void *font, uint32_t prev_cp, uint32_t cp) {
+    if (!font) return 0.0f;
+    struct FontHandle { FT_Face face; FT_Library library; };
+    FT_Face face = ((struct FontHandle*)font)->face;
+
+    FT_UInt prev_glyph = FT_Get_Char_Index(face, prev_cp);
+    FT_UInt curr_glyph = FT_Get_Char_Index(face, cp);
+    if (prev_glyph == 0 || curr_glyph == 0) return 0.0f;
+
+    FT_Vector kerning = {0, 0};
+    FT_Get_Kerning(face, prev_glyph, curr_glyph, FT_KERNING_DEFAULT, &kerning);
+    return kerning.x / 64.0f;
+}
+
 void free_bitmap_buffer(unsigned char *ptr) {
     free(ptr);
 }
